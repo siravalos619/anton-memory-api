@@ -9,76 +9,72 @@ export default {
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     };
 
+    // CORS
     if (request.method === "OPTIONS") {
-      return new Response(null, { headers });
+      return new Response(null, {
+        status: 204,
+        headers,
+      });
     }
 
     try {
+      // =========================================================
+      // HOME
+      // =========================================================
+      if (url.pathname === "/" && request.method === "GET") {
+        return jsonResponse(
+          {
+            ok: true,
+            service: "Anton Memory API",
+            version: "1.0",
+            endpoints: [
+              "GET /",
+              "GET /health",
+              "GET /cases",
+              "GET /cases/:id",
+              "GET /cases/search?q=search-term",
+              "POST /cases",
+            ],
+          },
+          200,
+          headers
+        );
+      }
+
+      // =========================================================
       // HEALTH CHECK
+      // =========================================================
       if (url.pathname === "/health" && request.method === "GET") {
         const result = await env.DB.prepare(
           "SELECT COUNT(*) AS count FROM case_library"
         ).first();
 
-        return new Response(
-          JSON.stringify({
+        return jsonResponse(
+          {
             ok: true,
             service: "Anton Memory API",
             database: "connected",
             cases: result?.count ?? 0,
-          }),
-          {
-            status: 200,
-            headers,
-          }
+          },
+          200,
+          headers
         );
       }
 
-      // GET ALL CASES
-      if (url.pathname === "/cases" && request.method === "GET") {
-        const limit = Math.min(
-          Math.max(parseInt(url.searchParams.get("limit") || "100"), 1),
-          500
-        );
-
-        const results = await env.DB.prepare(
-          `
-          SELECT *
-          FROM case_library
-          ORDER BY id DESC
-          LIMIT ?
-          `
-        )
-          .bind(limit)
-          .all();
-
-        return new Response(
-          JSON.stringify({
-            ok: true,
-            count: results.results.length,
-            cases: results.results,
-          }),
-          {
-            status: 200,
-            headers,
-          }
-        );
-      }
-
+      // =========================================================
       // SEARCH CASES
+      // =========================================================
       if (url.pathname === "/cases/search" && request.method === "GET") {
-        const q = url.searchParams.get("q");
+        const q = url.searchParams.get("q")?.trim();
 
         if (!q) {
-          return new Response(
-            JSON.stringify({
+          return jsonResponse(
+            {
               ok: false,
               error: "Search parameter q is required",
-            }),
-            {
-              status: 400,
-              headers,
-            }
+            },
+            400,
+            headers
           );
         }
 
@@ -95,9 +91,13 @@ export default {
              OR complaint LIKE ?
              OR error_codes LIKE ?
              OR observations LIKE ?
+             OR test_data LIKE ?
              OR root_cause LIKE ?
              OR recommended_repair LIKE ?
              OR oem_parts LIKE ?
+             OR customer_explanation LIKE ?
+             OR status LIKE ?
+             OR source LIKE ?
           ORDER BY id DESC
           LIMIT 100
           `
@@ -112,25 +112,68 @@ export default {
             search,
             search,
             search,
+            search,
+            search,
+            search,
+            search,
             search
           )
           .all();
 
-        return new Response(
-          JSON.stringify({
+        return jsonResponse(
+          {
             ok: true,
             query: q,
-            count: results.results.length,
-            cases: results.results,
-          }),
-          {
-            status: 200,
-            headers,
-          }
+            count: results.results?.length ?? 0,
+            cases: results.results ?? [],
+          },
+          200,
+          headers
         );
       }
 
+      // =========================================================
+      // GET ALL CASES
+      // =========================================================
+      if (url.pathname === "/cases" && request.method === "GET") {
+        const requestedLimit = parseInt(
+          url.searchParams.get("limit") || "100",
+          10
+        );
+
+        const limit = Math.min(
+          Math.max(
+            Number.isNaN(requestedLimit) ? 100 : requestedLimit,
+            1
+          ),
+          500
+        );
+
+        const results = await env.DB.prepare(
+          `
+          SELECT *
+          FROM case_library
+          ORDER BY id DESC
+          LIMIT ?
+          `
+        )
+          .bind(limit)
+          .all();
+
+        return jsonResponse(
+          {
+            ok: true,
+            count: results.results?.length ?? 0,
+            cases: results.results ?? [],
+          },
+          200,
+          headers
+        );
+      }
+
+      // =========================================================
       // GET ONE CASE
+      // =========================================================
       if (
         url.pathname.startsWith("/cases/") &&
         request.method === "GET"
@@ -138,15 +181,13 @@ export default {
         const id = url.pathname.split("/")[2];
 
         if (!id) {
-          return new Response(
-            JSON.stringify({
+          return jsonResponse(
+            {
               ok: false,
               error: "Case ID is required",
-            }),
-            {
-              status: 400,
-              headers,
-            }
+            },
+            400,
+            headers
           );
         }
 
@@ -161,44 +202,53 @@ export default {
           .first();
 
         if (!result) {
-          return new Response(
-            JSON.stringify({
+          return jsonResponse(
+            {
               ok: false,
               error: "Case not found",
-            }),
-            {
-              status: 404,
-              headers,
-            }
+            },
+            404,
+            headers
           );
         }
 
-        return new Response(
-          JSON.stringify({
+        return jsonResponse(
+          {
             ok: true,
             case: result,
-          }),
-          {
-            status: 200,
-            headers,
-          }
+          },
+          200,
+          headers
         );
       }
 
+      // =========================================================
       // SAVE NEW CASE
+      // =========================================================
       if (url.pathname === "/cases" && request.method === "POST") {
-        const body = await request.json();
+        let body;
 
-        if (!body.complaint) {
-          return new Response(
-            JSON.stringify({
+        try {
+          body = await request.json();
+        } catch {
+          return jsonResponse(
+            {
+              ok: false,
+              error: "Request body must be valid JSON",
+            },
+            400,
+            headers
+          );
+        }
+
+        if (!body.complaint || !String(body.complaint).trim()) {
+          return jsonResponse(
+            {
               ok: false,
               error: "complaint is required",
-            }),
-            {
-              status: 400,
-              headers,
-            }
+            },
+            400,
+            headers
           );
         }
 
@@ -225,79 +275,91 @@ export default {
           `
         )
           .bind(
-            body.appliance_type ?? null,
-            body.brand ?? null,
-            body.model_number ?? null,
-            body.serial_number ?? null,
-            body.complaint,
-            body.error_codes ?? null,
-            body.observations ?? null,
-            body.test_data ?? null,
-            body.root_cause ?? null,
-            body.confidence ?? null,
-            body.recommended_repair ?? null,
-            body.oem_parts ?? null,
-            body.customer_explanation ?? null,
-            body.status ?? "completed",
-            body.source ?? "anton"
+            valueOrNull(body.appliance_type),
+            valueOrNull(body.brand),
+            valueOrNull(body.model_number),
+            valueOrNull(body.serial_number),
+            String(body.complaint).trim(),
+            valueOrNull(body.error_codes),
+            valueOrNull(body.observations),
+            valueOrNull(body.test_data),
+            valueOrNull(body.root_cause),
+            valueOrNull(body.confidence),
+            valueOrNull(body.recommended_repair),
+            valueOrNull(body.oem_parts),
+            valueOrNull(body.customer_explanation),
+            valueOrDefault(body.status, "completed"),
+            valueOrDefault(body.source, "anton")
           )
           .run();
 
-        return new Response(
-          JSON.stringify({
+        return jsonResponse(
+          {
             ok: true,
             message: "Case saved to Anton memory",
             id: result.meta?.last_row_id ?? null,
-          }),
-          {
-            status: 201,
-            headers,
-          }
+          },
+          201,
+          headers
         );
       }
 
-      // HOME
-      if (url.pathname === "/" && request.method === "GET") {
-        return new Response(
-          JSON.stringify({
-            ok: true,
-            service: "Anton Memory API",
-            endpoints: [
-              "GET /health",
-              "GET /cases",
-              "GET /cases/:id",
-              "GET /cases/search?q=search-term",
-              "POST /cases",
-            ],
-          }),
-          {
-            status: 200,
-            headers,
-          }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({
+      // =========================================================
+      // ROUTE NOT FOUND
+      // =========================================================
+      return jsonResponse(
+        {
           ok: false,
           error: "Route not found",
-        }),
-        {
-          status: 404,
-          headers,
-        }
+        },
+        404,
+        headers
       );
     } catch (error) {
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          error: error.message,
-        }),
+      console.error("Anton Memory API error:", error);
+
+      return jsonResponse(
         {
-          status: 500,
-          headers,
-        }
+          ok: false,
+          error: error?.message || "Internal server error",
+        },
+        500,
+        headers
       );
     }
   },
-}; 
+};
+
+
+// =============================================================
+// HELPERS
+// =============================================================
+
+function jsonResponse(data, status, headers) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers,
+  });
+}
+
+
+function valueOrNull(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  return value;
+}
+
+
+function valueOrDefault(value, defaultValue) {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+
+  return value;
+}
