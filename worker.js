@@ -300,5 +300,4 @@ export default {
       );
     }
   },
-};
-https
+}; ty
